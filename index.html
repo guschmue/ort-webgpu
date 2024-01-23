@@ -104,21 +104,22 @@
         return data;
     }
 
-    async function fetchAndCache(url) {
+    async function fetchAndCache(base_url, model_path) {
+        const url = `${base_url}/${model_path}`;
         try {
             const cache = await caches.open("onnx");
             let cachedResponse = await cache.match(url);
             if (cachedResponse == undefined) {
                 await cache.add(url);
                 cachedResponse = await cache.match(url);
-                log(`${url} (network)`);
+                log(`${model_path} (network)`);
             } else {
-                log(`${url} (cached)`);
+                log(`${model_path} (cached)`);
             }
             const data = await cachedResponse.arrayBuffer();
             return data;
         } catch (error) {
-            log(`${url} (network)`);
+            log(`${model_path} (network)`);
             return await fetch(url).then(response => response.arrayBuffer());
         }
     }
@@ -140,9 +141,8 @@
         }
         for (const [name, model] of Object.entries(models)) {
             try {
-                const url = `${config.model}/${model.url}`;
                 const start = performance.now();
-                const model_bytes = await fetchAndCache(url);
+                const model_bytes = await fetchAndCache(config.model, model.url);
                 models[name].sess = await ort.InferenceSession.create(model_bytes, opt);
                 const stop = performance.now();
                 log(`${model.url} in ${(stop - start).toFixed(1)}ms`);
