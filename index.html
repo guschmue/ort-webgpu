@@ -36,16 +36,16 @@
         </div>
         <div id="image_area">
             <div class="onerow">
-                <div style="margin-right: 8px;">
+                <div id="img_div_0" style="margin-right: 8px;">
                     <canvas id="img_canvas_0"></canvas>
                 </div>
-                <div style="margin-right: 8px;">
+                <div id="img_div_1" style="margin-right: 8px;">
                     <canvas id="img_canvas_1"></canvas>
                 </div>
-                <div style="margin-right: 8px;">
+                <div id="img_div_2" style="margin-right: 8px;">
                     <canvas id="img_canvas_2"></canvas>
                 </div>
-                <div style="margin-right: 8px;">
+                <div id="img_div_3" style="margin-right: 8px;">
                     <canvas id="img_canvas_3"></canvas>
                 </div>
             </div>
@@ -274,6 +274,8 @@
         canvas.width = imageData.width;
         canvas.height = imageData.height;
         canvas.getContext('2d').putImageData(imageData, 0, 0);
+        const div = document.getElementById(`img_div_${image_nr}`);
+        div.style.opacity = 1.
     }
 
     async function run() {
@@ -286,6 +288,11 @@
             }
             let canvases = [];
             await loading;
+
+            for (let j = 0; j < config.images; j++) {
+                const div = document.getElementById(`img_div_${j}`);
+                div.style.opacity = 0.5
+            }
 
             const { input_ids } = await tokenizer(text.value, { padding: true, max_length: 77, truncation: true, return_tensor: false });
 
