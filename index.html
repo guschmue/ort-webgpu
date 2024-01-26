@@ -36,16 +36,16 @@
         </div>
         <div id="image_area">
             <div class="onerow">
-                <div id="img_div_0" style="margin-right: 8px;">
+                <div id="img_div_0" style="margin-right: 4px;">
                     <canvas id="img_canvas_0"></canvas>
                 </div>
-                <div id="img_div_1" style="margin-right: 8px;">
+                <div id="img_div_1" style="margin-right: 4px;">
                     <canvas id="img_canvas_1"></canvas>
                 </div>
-                <div id="img_div_2" style="margin-right: 8px;">
+                <div id="img_div_2" style="margin-right: 4px;">
                     <canvas id="img_canvas_2"></canvas>
                 </div>
-                <div id="img_div_3" style="margin-right: 8px;">
+                <div id="img_div_3" style="margin-right: 4px;">
                     <canvas id="img_canvas_3"></canvas>
                 </div>
             </div>
@@ -143,7 +143,8 @@
             try {
                 const start = performance.now();
                 const model_bytes = await fetchAndCache(config.model, model.url);
-                models[name].sess = await ort.InferenceSession.create(model_bytes, opt);
+                const sess_opt = { ...opt, ...model.opt };
+                models[name].sess = await ort.InferenceSession.create(model_bytes, sess_opt);
                 const stop = performance.now();
                 log(`${model.url} in ${(stop - start).toFixed(1)}ms`);
             } catch (e) {
@@ -156,9 +157,18 @@
     const config = getConfig();
 
     const models = {
-        "unet": { url: "unet/model.onnx", size: 640 },
-        "text_encoder": { url: "text_encoder/model.onnx", size: 1700 },
-        "vae_decoder": { url: "vae_decoder/model.onnx", size: 95 },
+        "unet": {
+            url: "unet/model.onnx", size: 640,
+            opt: { freeDimensionOverrides: { batch: 1, channels: 4, height: 64, width: 64, sequence_length: 77, steps: 1 } }
+        },
+        "text_encoder": { url: "text_encoder/model.onnx", size: 1700, 
+            // sequence_length: 77 for some reawon produces a bad image
+            opt: { freeDimensionOverrides: { batch_size: 1, } },
+        },
+        "vae_decoder": {
+            url: "vae_decoder/model.onnx", size: 95,
+            opt: { freeDimensionOverrides: { batch: 1, channels: 4, height: 64, width: 64, } }
+        }
     }
 
     const text = document.getElementById("user-input");
@@ -179,7 +189,6 @@
         ort.env.wasm.numThreads = config.threads;
         ort.env.wasm.simd = true;
     }
-    ort.env.wasm.proxy = (config.provider == "webnn");
 
     const opt = {
         executionProviders: [config.provider],
