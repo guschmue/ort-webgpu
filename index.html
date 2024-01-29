@@ -159,15 +159,16 @@
     const models = {
         "unet": {
             url: "unet/model.onnx", size: 640,
-            opt: { freeDimensionOverrides: { batch: 1, channels: 4, height: 64, width: 64, sequence_length: 77, steps: 1 } }
+            // should have 'steps: 1' but will fail to create the session
+            opt: { freeDimensionOverrides: { batch_size: 1, num_channels: 4, height: 64, width: 64, sequence_length: 77, } }
         },
         "text_encoder": { url: "text_encoder/model.onnx", size: 1700, 
-            // sequence_length: 77 for some reawon produces a bad image
-            opt: { freeDimensionOverrides: { batch_size: 1, } },
+            // should have 'sequence_length: 77' but produces a bad image
+            opt: { freeDimensionOverrides: { batch_size: 1,  } },
         },
         "vae_decoder": {
             url: "vae_decoder/model.onnx", size: 95,
-            opt: { freeDimensionOverrides: { batch: 1, channels: 4, height: 64, width: 64, } }
+            opt: { freeDimensionOverrides: { batch_size: 1, num_channels_latent: 4, height_latent: 64, width_latent: 64 } }
         }
     }
 
