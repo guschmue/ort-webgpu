@@ -268,7 +268,6 @@ async function hasFp16() {
 window.onload = () => {
   hasFp16().then((fp16) => {
     if (fp16) {
-      log("f16 availanle");
       LoadModel().then(() => {
         adjustPadding();
         sendButton.addEventListener('click', submitRequest);

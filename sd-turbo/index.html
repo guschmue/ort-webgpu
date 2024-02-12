@@ -361,7 +361,6 @@
         hasFp16().then((fp16) => {
             if (fp16) {
                 loading = load_models(models);
-                main();
             } else {
                 log("Your GPU or Browser doesn't support webgpu/f16");
             }
