@@ -260,7 +260,7 @@ async function Query(query, cb) {
 async function LoadModel() {
 
   env.backends.onnx.wasm.numThreads = 1;
-  env.allowRemoteModels = false;
+  env.allowRemoteModels = true;
   env.backends.onnx.wasm.wasmPaths = 'transformers/';
 
   const model = config.model;
