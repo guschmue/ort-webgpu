@@ -165,24 +165,65 @@ async function submitRequest() {
   document.getElementById('user-input').value = '';
 }
 
+const preCannedQueries = {
+  "1": "Tell me about the lighthouse of Alexandria",
+  "2": "Did the lighthouse of Alexandria existed at the same time the library of Alexandria existed?",
+  "3": "How did the Pharos lighthouse impact ancient maritime trade?",
+  "4": "Tell me about Constantinople?",
+};
+
 // Event listener for Ctrl + Enter or CMD + Enter
 document.getElementById('user-input').addEventListener('keydown', function (e) {
-  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-    submitRequest();
+  if (e.ctrlKey) {
+    if (e.key === 'Enter') {
+      submitRequest();
+    } else {
+      const query = preCannedQueries[e.key];
+      if (query) {
+        document.getElementById('user-input').value = query;
+        submitRequest();
+      }
+    }
   }
 });
-
-const provider = "webgpu";
-let pipe;
 
 function cleanup_text(text) {
   const assistantText = text.slice(text.indexOf('assistant|>') + 11);
   return assistantText;
 }
 
-async function Query(query, cb) {
-  let prompt;
+function getConfig() {
+  const query = window.location.search.substring(1);
+  var config = {
+    model: "schmuell/TinyLlama-1.1B-Chat-v1.0-int4",
+    provider: "webgpu",
+    isPhi2: false,
+    needsExternalData: false,
+    layers: 22,
+  }
+  let vars = query.split("&");
+  for (var i = 0; i < vars.length; i++) {
+    let pair = vars[i].split("=");
+    if (pair[0] in config) {
+      config[pair[0]] = decodeURIComponent(pair[1]);
+    } else if (pair[0].length > 0) {
+      throw new Error("unknown argument: " + pair[0]);
+    }
+  }
+  if (config.model.includes("phi2")) {
+    config.isPhi2 = true;
+    config.layers = 32;
+  }
+  config.needsExternalData = config.model.includes("-fp16");
 
+  return config;
+}
+
+const config = getConfig();
+
+let pipe;
+
+async function Query(query, cb) {
   // Define the list of messages
   const messages = [
     { "role": "system", "content": "You are a friendly assistant." },
@@ -191,16 +232,21 @@ async function Query(query, cb) {
   ]
 
   // Construct the prompt
-  prompt = pipe.tokenizer.apply_chat_template(messages, {
-    tokenize: false, add_generation_prompt: true,
-  });
+  let prompt;
+  if (config.isPhi2) {
+    prompt = query;
+  } else {
+    prompt = pipe.tokenizer.apply_chat_template(messages, {
+      tokenize: false, add_generation_prompt: true,
+    });
+  }
 
   // Generate a response
   const start = performance.now();
   const result = await pipe(prompt, {
     max_new_tokens: 256,
     temperature: 0.7,
-    do_sample: false,  // < TRUE
+    do_sample: true,
     top_k: 15,
     callback_function: function (beams) {
       const decodedText = pipe.tokenizer.decode(beams[0].output_token_ids, { skip_special_tokens: true, });
@@ -208,46 +254,49 @@ async function Query(query, cb) {
     }
   });
   const stop = performance.now();
-  log(`took ${((stop - start) / 1000).toFixed(1)}sec`);
+  console.log(`took ${((stop - start) / 1000).toFixed(1)}sec`);
 }
 
 async function LoadModel() {
-  let options;
-  let model;
 
   env.backends.onnx.wasm.numThreads = 1;
-  env.localModelPath = 'models/';
-  env.allowRemoteModels = true;
-  env.backends.onnx.wasm.wasmPaths = 'dist/';
+  env.allowRemoteModels = false;
+  env.backends.onnx.wasm.wasmPaths = 'transformers/';
 
-  if (provider == "webgpu") {
-    model = 'schmuell/TinyLlama-1.1B-Chat-v1.0-fp16';
+  const model = config.model;
+  let options;
+
+  if (config.isPhi2) {
+    // slighly different setup for phi2
     options = {
       quantized: false,
       session_options: {
-        executionProviders: ["webgpu"],
+        executionProviders: [config.provider],
         preferredOutputLocation: {},
-        externalData: [
-          {
-            data: 'onnx/decoder_model_merged.onnx.data',
-            path: 'decoder_model_merged.onnx.data'
-          },
-        ]
       }
     }
-    for (let i = 0; i < 22; ++i) {
-      options.session_options.preferredOutputLocation[`present.${i}.key`] = 'gpu-buffer';
-      options.session_options.preferredOutputLocation[`present.${i}.value`] = 'gpu-buffer';
+  } else {
+    options = {
+      quantized: config.provider == "wasm" ? true : false,
+      session_options: {
+        executionProviders: [config.provider],
+        preferredOutputLocation: {},
+      }
+    }
+    if (config.provider == "webgpu") {
+      for (let i = 0; i < config.layers; ++i) {
+        options.session_options.preferredOutputLocation[`present.${i}.key`] = 'gpu-buffer';
+        options.session_options.preferredOutputLocation[`present.${i}.value`] = 'gpu-buffer';
+      }
     }
   }
-  if (provider == "wasm") {
-    model = 'Xenova/TinyLlama-1.1B-Chat-v1.0';
-    options = {
-      quantized: true,
-      session_options: {
-        executionProviders: ["wasm"],
-      }
-    }
+  if (config.needsExternalData) {
+    options.session_options.externalData = [
+      {
+        data: 'onnx/decoder_model_merged.onnx.data',
+        path: 'decoder_model_merged.onnx.data'
+      },
+    ];
   }
 
   const start = performance.now();
@@ -278,7 +327,5 @@ window.onload = () => {
     } else {
       log("Your GPU or Browser doesn't support webgpu/f16");
     }
-
   });
-
 }
