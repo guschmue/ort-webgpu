@@ -2271,18 +2271,6 @@ const MODELS = {
             size: 17,
         },
     ],
-    slimsam: [
-        {
-            name: "slimsam-encoder",
-            url: "https://huggingface.co/Xenova/slimsam-77-uniform/resolve/main/onnx/vision_encoder.onnx",
-            size: 24,
-        },
-        {
-            name: "slimsam-decoder",
-            url: "https://huggingface.co/Xenova/slimsam-77-uniform/resolve/main/onnx/prompt_encoder_mask_decoder.onnx",
-            size: 16,
-        }
-    ],
 };
 
 const config = getConfig();
@@ -2328,8 +2316,6 @@ function getConfig() {
     }
     config.threads = parseInt(config.threads);
     config.local = parseInt(config.local);
-    config.isSlimSam = config.model.includes("slimsam");
-
     return config;
 }
 
@@ -2338,21 +2324,6 @@ function getConfig() {
  */
 function cloneTensor(t) {
     return new onnxruntime_web_webgpu__WEBPACK_IMPORTED_MODULE_0__["default"].Tensor(t.type, Float32Array.from(t.data), t.dims);
-}
-
-/*
- * create feed for slimsam models
- */
-function feedForSlim(emb, points, labels) {
-    const pointCoords = new onnxruntime_web_webgpu__WEBPACK_IMPORTED_MODULE_0__["default"].Tensor(new Float32Array(points), [1, 1, points.length / 2, 2]);
-    const pointLabels = new onnxruntime_web_webgpu__WEBPACK_IMPORTED_MODULE_0__["default"].Tensor(BigInt64Array.from(labels.map((x) => BigInt(x))), [1, 1, labels.length]);
-
-    return {
-        "image_embeddings": cloneTensor(emb.image_embeddings),
-        "image_positional_embeddings": cloneTensor(emb.image_positional_embeddings),
-        "input_points": pointCoords,
-        "input_labels": pointLabels,
-    }
 }
 
 /*
@@ -2375,6 +2346,9 @@ function feedForSam(emb, points, labels) {
     }
 }
 
+/*
+ * Handle cut-out event
+ */
 async function handleCut(event) {
     if (points.length == 0) {
         return;
@@ -2382,7 +2356,7 @@ async function handleCut(event) {
 
     const [w, h] = [canvas.width, canvas.height];
 
-    // cutout
+    // canvas for cut-out
     const cutCanvas = new OffscreenCanvas(w, h);
     const cutContext = cutCanvas.getContext('2d');
     const cutPixelData = cutContext.getImageData(0, 0, w, h);
@@ -2393,6 +2367,7 @@ async function handleCut(event) {
     maskContext.drawImage(await createImageBitmap(maskImageData), 0, 0);
     const maskPixelData = maskContext.getImageData(0, 0, w, h);
 
+    // copy masked pixels to cut-out
     for (let i = 0; i < maskPixelData.data.length; i += 4) {
         if (maskPixelData.data[i] > 0) {
             for (let j = 0; j < 4; ++j) {
@@ -2411,61 +2386,60 @@ async function handleCut(event) {
     link.remove();
 }
 
-/**
- * handler to handle click event on canvas
- *  with ctl: add point
- *  with shift: forground label
- */
-async function handleClick(event) {
+async function decoder(points, labels) {
+    let ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    canvas.width = imageImageData.width;
+    canvas.height = imageImageData.height;
+    ctx.putImageData(imageImageData, 0, 0);
 
+    if (points.length > 0) {
+        // need to wait for encoder to be ready
+        if (image_embeddings === undefined) {
+            await MODELS[config.model][0].sess;
+        }
+
+        // wait for encoder to deliver embeddings
+        const emb = await image_embeddings;
+
+        // the decoder
+        const session = MODELS[config.model][1].sess;
+
+        const feed = feedForSam(emb, points, labels);
+        const start = performance.now();
+        const res = await session.run(feed);
+        decoder_latency.innerText = `${(performance.now() - start).toFixed(1)}ms`;
+
+        for (let i = 0; i < points.length; i += 2) {
+            ctx.fillStyle = 'blue';
+            ctx.fillRect(points[i], points[i + 1], 10, 10);
+        }
+        const mask = res.masks;
+        maskImageData = mask.toImageData();
+        ctx.globalAlpha = 0.3;
+        ctx.drawImage(await createImageBitmap(maskImageData), 0, 0);
+    }
+}
+
+function getPoint(event) {
+    const rect = canvas.getBoundingClientRect();
+    const x = Math.trunc(event.clientX - rect.left);
+    const y = Math.trunc(event.clientY - rect.top);
+    return [x, y];
+}
+
+/**
+ * handler mouse move event
+ */
+async function handleMouseMove(event) {
     if (isClicked) {
         return;
     }
     try {
         isClicked = true;
         canvas.style.cursor = "wait";
-
-        const rect = canvas.getBoundingClientRect();
-        const x = Math.trunc(event.clientX - rect.left);
-        const y = Math.trunc(event.clientY - rect.top);
-        const label = (event.shiftKey) ? 0 : 1;
-
-        // need to wait for encoer to be ready
-        if (image_embeddings === undefined) {
-            await MODELS[config.model][0].sess;
-        }
-
-        // wait for encder to deliver embeddings
-        const emb = await image_embeddings;
-        if (!event.ctrlKey) {
-            points = [];
-            labels = [];
-        }
-        points.push(x, y);
-        labels.push(label);
-
-        let ctx = canvas.getContext('2d');
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        canvas.width = imageImageData.width;
-        canvas.height = imageImageData.height;
-        ctx.putImageData(imageImageData, 0, 0);
-        for (let i = 0; i < points.length; i += 2) {
-            ctx.fillStyle = 'blue';
-            ctx.fillRect(points[i], points[i + 1], 10, 10);
-        }
-
-        // the decoder
-        const session = MODELS[config.model][1].sess;
-
-        const feed = (config.isSlimSam) ? feedForSlim(emb, points, labels) : feedForSam(emb, points, labels);
-        const start = performance.now();
-        const res = await session.run(feed);
-        decoder_latency.innerText = `${(performance.now() - start).toFixed(1)}ms`;
-
-        const mask = (config.isSlimSam) ? res.pred_masks : res.masks;
-        maskImageData = mask.toImageData();
-        ctx.globalAlpha = 0.3;
-        ctx.drawImage(await createImageBitmap(maskImageData), 0, 0);
+        const point = getPoint(event);
+        await decoder([...points, point[0], point[1]], [...labels, 1]);
     }
     finally {
         canvas.style.cursor = "default";
@@ -2473,6 +2447,29 @@ async function handleClick(event) {
     }
 }
 
+/**
+ * handler to handle click event on canvas
+ */
+async function handleClick(event) {
+    if (isClicked) {
+        return;
+    }
+    try {
+        isClicked = true;
+        canvas.style.cursor = "wait";
+
+        const point = getPoint(event);
+        const label = 1;
+        points.push(point[0]);
+        points.push(point[1]);
+        labels.push(label);
+        await decoder(points, labels);
+    }
+    finally {
+        canvas.style.cursor = "default";
+        isClicked = false;
+    }
+}
 
 /**
  * handler called when image available
@@ -2480,13 +2477,15 @@ async function handleClick(event) {
 async function handleImage(img) {
     const encoder_latency = document.getElementById("encoder_latency");
     encoder_latency.innerText = "";
+    points = [];
+    labels = [];
     filein.disabled = true;
     decoder_latency.innerText = "";
     canvas.style.cursor = "wait";
     image_embeddings = undefined;
-    var width = img.width;
-    var height = img.height;
 
+    let width = img.width;
+    let height = img.height;
     if (width > height) {
         if (width > MAX_WIDTH) {
             height = height * (MAX_WIDTH / width);
@@ -2500,15 +2499,14 @@ async function handleImage(img) {
     }
     width = Math.round(width);
     height = Math.round(height);
-
     canvas.width = width;
     canvas.height = height;
+    
     var ctx = canvas.getContext("2d");
     ctx.drawImage(img, 0, 0, width, height);
 
     imageImageData = ctx.getImageData(0, 0, width, height);
 
-    //const t = await ort.Tensor.fromImage(imageImageData, options = );
     const t = await onnxruntime_web_webgpu__WEBPACK_IMPORTED_MODULE_0__["default"].Tensor.fromImage(imageImageData, { resizedWidth: MODEL_WIDTH, resizedHeight: MODEL_HEIGHT });
     const feed = (config.isSlimSam) ? { "pixel_values": t } : { "input_image": t };
     const session = await MODELS[config.model][0].sess;
@@ -2521,7 +2519,6 @@ async function handleImage(img) {
     });
     filein.disabled = false;
 }
-
 
 /*
  * fetch and cache url
@@ -2544,7 +2541,6 @@ async function fetchAndCache(url, name) {
         return await fetch(url).then(response => response.arrayBuffer());
     }
 }
-
 
 /*
  * load models one at a time
@@ -2600,10 +2596,17 @@ async function main() {
     filein = document.getElementById("file-in");
     decoder_latency = document.getElementById("decoder_latency");
 
+    document.getElementById("clear-button").addEventListener("click", () => {
+        points = [];
+        labels = [];
+        decoder(points, labels);
+    });
+
     let img = document.getElementById("original-image");
 
     await load_models(MODELS[config.model]).then(() => {
         canvas.addEventListener("click", handleClick);
+        canvas.addEventListener("mousemove", handleMouseMove);
         document.getElementById("cut-button").addEventListener("click", handleCut);
 
         // image upload
