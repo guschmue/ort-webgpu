@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.1/dist/css/bootstrap.min.css" rel="stylesheet"
   integrity="sha384-4bw+/aepP/YC94hEpVNVgiZdgIC5+VKNBQNGCHeKRQN+PtmoHDEXuppvnDJzQIu9" crossorigin="anonymous" />
-  <script src="./dist/bundle.min.js"></script>
+  <script type="module" src="dist/index.js"></script>
    
   <style>
     /* Add rounded corners to blocks */
@@ -71,14 +71,21 @@
                   accept=".jpg, .png, .jpeg, .gif, .bmp, .tif, .tiff|image/*">
               </div>
             </form>
-          </div>
+            <div class="form-group ">
+              <button id="cut-button" type="button" class="btn btn-primary">Cut</button>
+              <button id="clear-button" type="button" class="btn btn-primary">Clear</button>
+            </div>
+        </div>
           <div style="margin-top: 30px;">
             <div>Other providers:</div>
             <a href="index.html?provider=wasm">wasm</a>
             <a href="index.html?provider=webgpu">webgpu</a>
             <a href="index.html?provider=webnn">webnn</a>
           </div>
-
+          <div style="margin-top: 30px;">
+            Click to set a point <br/>
+            Click and hold ctl to add a point
+          </div>
         </div>
 
         <p class="text-lg-start">
