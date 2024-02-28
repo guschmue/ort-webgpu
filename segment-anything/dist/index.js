@@ -2345,9 +2345,9 @@ const MODELS = {
 
 const config = getConfig();
 
-onnxruntime_web_webgpu__WEBPACK_IMPORTED_MODULE_0__["default"].env.wasm.wasmPaths = `${window.location.origin}/dist/`;
+onnxruntime_web_webgpu__WEBPACK_IMPORTED_MODULE_0__["default"].env.wasm.wasmPaths = 'dist/';
 onnxruntime_web_webgpu__WEBPACK_IMPORTED_MODULE_0__["default"].env.wasm.numThreads = config.threads;
-onnxruntime_web_webgpu__WEBPACK_IMPORTED_MODULE_0__["default"].env.wasm.proxy = config.provider == "wasm";
+// ort.env.wasm.proxy = config.provider == "wasm";
 
 let canvas;
 let filein;
