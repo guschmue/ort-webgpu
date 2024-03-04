@@ -2306,15 +2306,9 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _dist_esm_ort_webgpu_min_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./dist/esm/ort.webgpu.min.js */ "./dist/esm/ort.webgpu.min.js");
 
 
-// https://upload.wikimedia.org/wikipedia/commons/a/a4/BBH_gravitational_lensing_of_gw150914.webm
-
 _dist_esm_ort_webgpu_min_js__WEBPACK_IMPORTED_MODULE_0__.env.wasm.numThreads = 1;
 _dist_esm_ort_webgpu_min_js__WEBPACK_IMPORTED_MODULE_0__.env.wasm.simd = true;
 _dist_esm_ort_webgpu_min_js__WEBPACK_IMPORTED_MODULE_0__.env.wasm.wasmPaths = 'dist/';
-
-const video = document.getElementById('video');
-const canvas = document.getElementById('canvas');
-const ctx = canvas.getContext('2d');
 
 const model_path = 'Xenova/yolov9-c';
 
@@ -2322,9 +2316,14 @@ const colorMap = [
     "green", "blue", "red", "yellow"
 ]
 
+const video = document.getElementById('video');
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+
 let labels;
 let insession = false;
 let processed = 0;
+let frames_start = 0;
 let frames = 0;
 let latencies = 0;
 
@@ -2358,7 +2357,6 @@ function getConfig() {
 }
 
 const config = getConfig();
-
 
 function renderBox([xmin, ymin, xmax, ymax, score, id]) {
     const color = colorMap[id % colorMap.length];
@@ -2440,9 +2438,12 @@ async function main() {
 
     log("ready.")
 
-
     video.addEventListener('loadedmetadata', function () {
         console.log("loadedmetadata");
+    });
+
+    video.addEventListener('seeked', () => {
+        frames_start = undefined;
     });
 
     video.addEventListener("play", () => {
@@ -2453,12 +2454,18 @@ async function main() {
         processed = 0;
         frames = 0;
         latencies = 0;
+        frames_start = undefined;
 
         document.getElementById('resolution').innerText = `${w}x${h}`;
 
         const frameCallback = (now, metadata) => {
             const data = ctx.getImageData(0, 0, w, h);
             frames = metadata.presentedFrames;
+            if (frames_start === undefined) {
+                frames_start = frames;
+                processed = 0;
+            }
+            console.log(`${frames_start} - ${frames}`);
             if (!insession) {
                 insession = true;
                 _dist_esm_ort_webgpu_min_js__WEBPACK_IMPORTED_MODULE_0__.Tensor.fromImage(data).then((pixel_values) => {
@@ -2468,8 +2475,9 @@ async function main() {
                         latencies += end - start;
                         processed++;
                         if (processed % 10 == 0) {
+                            const frames_seen = frames - frames_start;
                             document.getElementById('latency').innerText = (latencies / processed).toFixed(2) + "ms";
-                            document.getElementById('dropped').innerText = (100 * (frames - processed) / frames).toFixed(1) + "%";
+                            document.getElementById('dropped').innerText = (100 * (frames_seen - processed) / frames_seen).toFixed(1) + "%";
                         }
                         ctx.drawImage(video, 0, 0);
                         const t = outputs.outputs;
@@ -2480,12 +2488,10 @@ async function main() {
                         video.requestVideoFrameCallback(frameCallback);
                     });
                 });
-            } else {
-                video.requestVideoFrameCallback(frameCallback);
             }
         };
 
-        // Request the first frame
+        // request the first frame
         video.requestVideoFrameCallback(frameCallback);
     });
 
