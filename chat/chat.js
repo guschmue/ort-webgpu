@@ -1,4 +1,5 @@
-import { env, pipeline } from './transformers/transformers.js';
+import { env, AutoTokenizer } from './transformers/transformers.js';
+import * as ort from './dist/esm/ort.webgpu.min.js'
 
 const clipboardIcon = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-clipboard" viewBox="0 0 16 16">
 <path d="M4 1.5H3a2 2 0 0 0-2 2V14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V3.5a2 2 0 0 0-2-2h-1v1h1a1 1 0 0 1 1 1V14a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3.5a1 1 0 0 1 1-1h1v-1z"/>
@@ -92,14 +93,11 @@ function copyTextToClipboard(responseDiv, with_button) {
   }
 }
 
-let interrupt;
-
 
 // Function to handle the user input and call the API functions
 async function submitRequest() {
-  if (sendButton.innerHTML == "Stop" && interrupt) {
-    console.log("Stop");
-    interrupt.abort('Stop button pressed');
+  if (sendButton.innerHTML == "Stop") {
+    llm.abort();
     return;
   }
 
@@ -138,12 +136,11 @@ async function submitRequest() {
 
   // create button to stop text generation
   sendButton.innerHTML = "Stop";
-  interrupt = new AbortController();
 
   // change autoScroller to keep track of our new responseDiv
   autoScroller.observe(responseDiv);
 
-  Query(context + " " + input, (word) => {
+  Query(input, (word) => {
     // add word to response
     responseDiv.innerHTML = DOMPurify.sanitize(marked.parse(word)); // Append word to response container
   }).then(() => {
@@ -151,14 +148,12 @@ async function submitRequest() {
     copyTextToClipboard(responseDiv, true);
     sendButton.innerHTML = "Send";
     spinner.remove();
-    interrupt = undefined;
   }).catch(error => {
     if (error !== 'Stop button pressed') {
       console.error(error);
     }
     sendButton.innerHTML = "Send";
     spinner.remove();
-    interrupt = undefined;
   });
 
   // Clear user input
@@ -187,122 +182,321 @@ document.getElementById('user-input').addEventListener('keydown', function (e) {
   }
 });
 
-function cleanup_text(text) {
-  const assistantText = text.slice(text.indexOf('assistant|>') + 11);
-  return assistantText;
+const MODELS = {
+  "tinyllama": { name: "tinyllama", path: "schmuell/TinyLlama-1.1B-Chat-v1.0-int4" },
+  "tinyllama_fp16": { name: "tinyllama-fp16", path: "schmuell/TinyLlama-1.1B-Chat-v1.0-fp16", externaldata: true },
+  "phi2": { name: "phi2", path: "schmuell/phi2-int4" },
+  "stablelm": { name: "stablelm", path: "schmuell/stablelm-2-zephyr-1_6b-int4" },
 }
 
 function getConfig() {
   const query = window.location.search.substring(1);
   var config = {
-    model: "schmuell/TinyLlama-1.1B-Chat-v1.0-int4",
+    model: "tinyllama",
     provider: "webgpu",
-    isPhi2: false,
-    needsExternalData: false,
-    layers: 22,
+    profiler: 0,
+    verbose: 0,
+    threads: 1,
+    trace: 0,
+    csv: 0,
+    max_tokens: 256,
+    local: 0,
   }
   let vars = query.split("&");
   for (var i = 0; i < vars.length; i++) {
     let pair = vars[i].split("=");
     if (pair[0] in config) {
-      config[pair[0]] = decodeURIComponent(pair[1]);
+      const key = pair[0];
+      const value = decodeURIComponent(pair[1]);
+      if (typeof config[key] == "number") {
+        config[key] = parseInt(value);
+      }
+      else {
+        config[key] = value;
+      }
     } else if (pair[0].length > 0) {
       throw new Error("unknown argument: " + pair[0]);
     }
   }
-  if (config.model.includes("phi2")) {
-    config.isPhi2 = true;
-    config.layers = 32;
+  if (MODELS[config.model] !== undefined) {
+    config.model = MODELS[config.model];
   }
-  config.needsExternalData = config.model.includes("-fp16");
-
   return config;
 }
 
-const config = getConfig();
-
-let pipe;
-
-async function Query(query, cb) {
-  // Define the list of messages
-  const messages = [
-    { "role": "system", "content": "You are a friendly assistant." },
-    // { "role": "user", "content": "Tell me about the lighthouse of Alexandria" },
-    { "role": "user", "content": query },
-  ]
-
-  // Construct the prompt
-  let prompt;
-  if (config.isPhi2) {
-    prompt = query;
-  } else {
-    prompt = pipe.tokenizer.apply_chat_template(messages, {
-      tokenize: false, add_generation_prompt: true,
-    });
-  }
-
-  // Generate a response
-  const start = performance.now();
-  const result = await pipe(prompt, {
-    max_new_tokens: 256,
-    temperature: 0.7,
-    do_sample: true,
-    top_k: 15,
-    callback_function: function (beams) {
-      const decodedText = pipe.tokenizer.decode(beams[0].output_token_ids, { skip_special_tokens: true, });
-      cb(cleanup_text(decodedText));
+async function fetchAndCache(url) {
+  try {
+    const cache = await caches.open("onnx");
+    let cachedResponse = await cache.match(url);
+    if (cachedResponse == undefined) {
+      await cache.add(url);
+      cachedResponse = await cache.match(url);
+      log(`${url} (network)`);
+    } else {
+      log(`${url} (cached)`);
     }
-  });
-  const stop = performance.now();
-  console.log(`took ${((stop - start) / 1000).toFixed(1)}sec`);
+    const data = await cachedResponse.arrayBuffer();
+    return data;
+  } catch (error) {
+    log(`${url} (network)`);
+    return await fetch(url).then(response => response.arrayBuffer());
+  }
 }
 
-async function LoadModel() {
+class LLM {
+  sess = undefined;
+  profiler = false;
+  trace = false;
+  feed = {};
+  output_tokens = [];
+  eos = 2;
+  need_position_ids = true;
+  stop = false;
+  kv_dims = [];
+  dtype = "float16";
 
-  env.backends.onnx.wasm.numThreads = 1;
-  env.allowRemoteModels = true;
-  env.backends.onnx.wasm.wasmPaths = 'transformers/';
+  constructor() {
+  }
 
-  const model = config.model;
-  let options;
+  async load(model, options) {
+    const provider = options.provider || "webgpu";
+    const verbose = options.verbose;
+    const local = options.local;
+    this.profiler = options.profiler;
+    this.trace = options.trace;
+    
+    const model_path = (local) ? "models/" + model.path : "https://huggingface.co/" + model.path + "/resolve/main";
+  
+    log(`loading... ${model.name},  ${provider}`);
+    const json_bytes = await fetchAndCache(model_path + "/config.json");
+    let textDecoder = new TextDecoder();
+    const model_config = JSON.parse(textDecoder.decode(json_bytes));
 
-  if (config.isPhi2) {
-    // slighly different setup for phi2
-    options = {
-      quantized: false,
-      session_options: {
-        executionProviders: [config.provider],
-        preferredOutputLocation: {},
+    const model_bytes = await fetchAndCache(model_path + "/onnx/decoder_model_merged.onnx");
+    log(`model size ${Math.round(model_bytes.byteLength / 1024 / 1024)} MB`);
+    const externaldata = (model.externalData) ? await fetchAndCache(model_path + '/onnx/decoder_model_merged.onnx.data') : false;
+
+    const opt = {
+      executionProviders: [provider],
+      preferredOutputLocation: {},
+    }
+
+    switch (provider) {
+      case "webgpu":
+        if (!("gpu" in navigator)) {
+          throw new Error("webgpu is NOT supported");
+        }
+        for (let i = 0; i < model_config.num_hidden_layers; ++i) {
+          opt.preferredOutputLocation[`present.${i}.key`] = 'gpu-buffer';
+          opt.preferredOutputLocation[`present.${i}.value`] = 'gpu-buffer';
+        }
+        break;
+      case "webnn":
+        if (!("ml" in navigator)) {
+          throw new Error("webnn is NOT supported");
+        }
+        break;
+    }
+
+    if (externaldata !== undefined) {
+      opt.externalData = [
+        {
+          data: externaldata,
+          path: 'decoder_model_merged.onnx.data'
+        },
+      ]
+    }
+    if (verbose) {
+      opt.logSeverityLevel = 0;
+      opt.logVerbosityLevel = 0;
+      ort.env.logLevel = "verbose";
+    }
+
+    ort.env.webgpu.profiling = {}
+    if (this.profiler) {
+      opt.enableProfiling = true;
+      ort.env.webgpu.profilingMode = 'default';
+      ort.env.webgpu.profiling.mode = 'default';
+    }
+
+    this.sess = await ort.InferenceSession.create(model_bytes, opt);
+
+    if (this.trace) {
+      ort.env.trace = true;
+      ort.env.webgpu.profiling.ondata = (version, inputsMetadata, outputsMetadata, kernelId, kernelType,
+        kernelName, programName, startTime, endTime) => { };
+    }
+
+    this.eos = model_config.eos_token_id;
+    this.kv_dims = [1, model_config.num_key_value_heads, 0, model_config.hidden_size / model_config.num_attention_heads];
+    this.dtype = config.model.dtype || "float16";
+    this.num_layers = model_config.num_hidden_layers;
+    this.initilize_feed();
+  }
+
+  initilize_feed() {
+    this.feed = {};
+    const empty = (this.dtype === "float16") ? new Uint16Array() : [];
+    for (let i = 0; i < this.num_layers; ++i) {
+      this.feed[`past_key_values.${i}.key`] = new ort.Tensor(this.dtype, empty, this.kv_dims)
+      this.feed[`past_key_values.${i}.value`] = new ort.Tensor(this.dtype, empty, this.kv_dims)
+    }
+    this.output_tokens = [];
+  }
+
+
+  argmax(t) {
+    const arr = t.data;
+    const start = t.dims[2] * (t.dims[1] - 1);
+    let max = arr[start];
+    let maxidx = 0;
+
+    for (let i = 0; i < t.dims[2]; i++) {
+      const val = arr[i + start];
+      if (!isFinite(val)) {
+        throw new Error("found infinitive in logits");
+      }
+      if (val > max) {
+        max = arr[i + start];
+        maxidx = i;
       }
     }
+    return maxidx;
+  }
+
+  update_kv_cache(feed, outputs) {
+    for (const name in outputs) {
+      if (name.startsWith('present')) {
+        let newName = name.replace('present', 'past_key_values');
+        // free old gpu buffer
+        const t = feed[newName];
+        if (t.location === 'gpu-buffer') {
+          t.dispose();
+        }
+        feed[newName] = outputs[name];
+      }
+    }
+  }
+
+  abort() {
+    this.stop = true;
+  }
+
+  async generate(tokens, callback, options) {
+    const keep_cache = options.keep_cache;
+    const max_tokens = options.max_tokens || 256;
+    const feed = this.feed;
+    const input_ids = new ort.Tensor('int64', BigInt64Array.from(tokens.map(BigInt)), [1, tokens.length]);
+    feed['input_ids'] = input_ids;
+    this.stop = false;
+
+    if (keep_cache) {
+      this.output_tokens.push(...input_ids)
+    } else {
+        this.initilize_feed();
+        this.output_tokens = Array.from(feed['input_ids'].data);
+    }
+
+    let last_token = 0n;
+    let seqlen = this.output_tokens.length;
+    if (this.need_position_ids) {
+      if (keep_cache) {
+        feed['position_ids'] = new ort.Tensor('int64', BigInt64Array.from({ length: seqlen }, (_, i) => BigInt(i)), [1, input_ids.length]);
+      } else {
+        feed['position_ids'] = new ort.Tensor('int64', BigInt64Array.from({ length: seqlen }, (_, i) => BigInt(i)), [1, seqlen]);
+      }
+    }
+
+    while (last_token != this.eos && seqlen < max_tokens && !this.stop) {
+      seqlen = this.output_tokens.length;
+      feed['attention_mask'] = new ort.Tensor('int64', BigInt64Array.from({ length: seqlen }, () => 1n), [1, seqlen]);
+      let outputs;
+      if (this.trace) {
+        console.timeStamp("RUN-BEGIN");
+        outputs = await this.sess.run(feed);
+        console.timeStamp("RUN-END");
+      } else {
+        outputs = await this.sess.run(feed);
+      }
+      last_token = BigInt(this.argmax(outputs.logits));
+      this.output_tokens.push(last_token);
+      if (callback && !this.profiler) {
+        callback(this.output_tokens);
+      }
+      this.update_kv_cache(feed, outputs);
+      feed['input_ids'] = new ort.Tensor('int64', BigInt64Array.from([last_token]), [1, 1]);
+      if (this.need_position_ids) {
+        feed['position_ids'] = new ort.Tensor('int64', BigInt64Array.from([BigInt(seqlen)]), [1, 1]);
+      }
+    }
+    if (this.profiler) {
+      this.sess.endProfiling();
+    }
+    return this.output_tokens;
+  }
+}
+
+
+const config = getConfig();
+let tokenizer;
+
+env.localModelPath = '/';
+env.allowRemoteModels = config.local == 0;
+env.allowLocalModels = config.local == 1;
+ort.env.wasm.numThreads = config.threads;
+ort.env.wasm.simd = true;
+ort.env.wasm.wasmPaths = document.location.pathname.replace('index.html', 'dist/');
+
+const llm = new LLM();
+
+function token_to_text(tokenizer, tokens, startidx) {
+  const txt = tokenizer.decode(tokens.slice(startidx), { skip_special_tokens: true, });
+  return txt;
+}
+
+async function Query(query, cb) {
+  let prompt;
+
+  if (config.model.name == 'phi2') {
+    prompt = `User: ${query}\nAssistant: `;
+  } else if (config.model.name == 'phix') {
+    prompt = query;
   } else {
-    options = {
-      quantized: config.provider == "wasm" ? true : false,
-      session_options: {
-        executionProviders: [config.provider],
-        preferredOutputLocation: {},
-      }
-    }
-    if (config.provider == "webgpu") {
-      for (let i = 0; i < config.layers; ++i) {
-        options.session_options.preferredOutputLocation[`present.${i}.key`] = 'gpu-buffer';
-        options.session_options.preferredOutputLocation[`present.${i}.value`] = 'gpu-buffer';
-      }
-    }
-  }
-  if (config.needsExternalData) {
-    options.session_options.externalData = [
-      {
-        data: 'onnx/decoder_model_merged.onnx.data',
-        path: 'decoder_model_merged.onnx.data'
-      },
-    ];
+    prompt = `"<|system|>\nYou are a friendly assistant.</s>\n<|user|>\n${query}</s>\n<|assistant|>\n`;
   }
 
-  const start = performance.now();
-  log("Loading model ... ");
-  pipe = await pipeline('text-generation', model, options);
-  log(`done, ${((performance.now() - start) / 1000).toFixed(1)}sec`);
+  const { input_ids } = await tokenizer(prompt, { return_tensor: false, padding: true, truncation: true });
+
+  const start_timer = performance.now();
+  const output_tokens = await llm.generate(input_ids, (output_tokens) => {
+    cb(token_to_text(tokenizer, output_tokens, input_ids.length));
+  }, {});
+
+  const took = (performance.now() - start_timer) / 1000;
+  const txt = token_to_text(tokenizer, output_tokens, input_ids.length);
+  cb(txt);
+  const seqlen = output_tokens.length;
+  const perf = `${seqlen} tokens in ${took.toFixed(1)}sec, ${(seqlen / took).toFixed(2)} tokens/sec`;
+  console.log(perf);
+}
+
+
+async function LoadModel() {
+  try {
+    tokenizer = await AutoTokenizer.from_pretrained(config.model.path);
+
+    log("Loading model...");
+    await llm.load(config.model, {
+      provider: config.provider,
+      profiler: config.profiler,
+      verbose: config.verbose,
+      trace: config.trace,
+      local: config.local,
+    });
+    log("Ready.");
+  } catch (error) {
+    log(error);
+  }
 }
 
 async function hasFp16() {
