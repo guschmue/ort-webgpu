@@ -161,7 +161,7 @@ async function submitRequest() {
 }
 
 const preCannedQueries = {
-  "1": "Tell me about the lighthouse of Alexandria",
+  "1": "Tell me about the lighthouse of Alexandria.",
   "2": "Did the lighthouse of Alexandria existed at the same time the library of Alexandria existed?",
   "3": "How did the Pharos lighthouse impact ancient maritime trade?",
   "4": "Tell me about Constantinople?",
@@ -199,7 +199,7 @@ function getConfig() {
     threads: 1,
     trace: 0,
     csv: 0,
-    max_tokens: 256,
+    max_tokens: 512,
     local: 0,
   }
   let vars = query.split("&");
@@ -440,12 +440,12 @@ class LLM {
 const config = getConfig();
 let tokenizer;
 
-env.localModelPath = '/';
+env.localModelPath = 'models';
 env.allowRemoteModels = config.local == 0;
 env.allowLocalModels = config.local == 1;
 ort.env.wasm.numThreads = config.threads;
 ort.env.wasm.simd = true;
-ort.env.wasm.wasmPaths = document.location.pathname.replace('index.html', 'dist/');
+ort.env.wasm.wasmPaths = document.location.pathname.replace('index.html', '') + 'dist/';
 
 const llm = new LLM();
 
@@ -458,7 +458,7 @@ async function Query(query, cb) {
   let prompt;
 
   if (config.model.name == 'phi2') {
-    prompt = `User: ${query}\nAssistant: `;
+    prompt = `User:${query}\nAssistant:`;
   } else if (config.model.name == 'phix') {
     prompt = query;
   } else {
