@@ -436,7 +436,7 @@ ort.env.wasm.wasmPaths = document.location.pathname.replace('index.html', '') + 
 const llm = new LLM();
 
 function token_to_text(tokenizer, tokens, startidx) {
-  const txt = tokenizer.decode(tokens.slice(startidx), { skip_special_tokens: false, });
+  const txt = tokenizer.decode(tokens.slice(startidx), { skip_special_tokens: true, });
   return txt;
 }
 
