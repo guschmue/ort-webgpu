@@ -187,6 +187,7 @@ const MODELS = {
   "tinyllama_fp16": { name: "tinyllama-fp16", path: "schmuell/TinyLlama-1.1B-Chat-v1.0-fp16", externaldata: true },
   "phi2": { name: "phi2", path: "schmuell/phi2-int4" },
   "phi3": { name: "phi3", path: "schmuell/phi3-int4", externaldata: true },
+  "phi3-1": { name: "phi3-1", path: "schmuell/phi3-1", externaldata: true },
   "stablelm": { name: "stablelm", path: "schmuell/stablelm-2-zephyr-1_6b-int4" },
 }
 
@@ -199,7 +200,7 @@ function getConfig() {
     verbose: 0,
     threads: 1,
     csv: 0,
-    max_tokens: 512,
+    max_tokens: 9999,
     local: 0,
   }
   let vars = query.split("&");
@@ -399,7 +400,7 @@ class LLM {
       }
     }
 
-    while (last_token != this.eos && seqlen < max_tokens && !this.stop) {
+    while (last_token != this.eos && last_token != 32007 && seqlen < max_tokens && !this.stop) {
       seqlen = this.output_tokens.length;
       feed['attention_mask'] = new ort.Tensor('int64', BigInt64Array.from({ length: seqlen }, () => 1n), [1, seqlen]);
       const outputs = await this.sess.run(feed);
@@ -435,20 +436,12 @@ ort.env.wasm.wasmPaths = document.location.pathname.replace('index.html', '') + 
 const llm = new LLM();
 
 function token_to_text(tokenizer, tokens, startidx) {
-  const txt = tokenizer.decode(tokens.slice(startidx), { skip_special_tokens: true, });
+  const txt = tokenizer.decode(tokens.slice(startidx), { skip_special_tokens: false, });
   return txt;
 }
 
 async function Query(query, cb) {
-  let prompt;
-
-  if (config.model.name == 'phi2') {
-    prompt = `User:${query}\nAssistant:`;
-  } else if (config.model.name == 'phix') {
-    prompt = query;
-  } else {
-    prompt = `"<|system|>\nYou are a friendly assistant.</s>\n<|user|>\n${query}</s>\n<|assistant|>\n`;
-  }
+  let prompt = `<|system|>\nYou are a friendly assistant.<|end|>\n<|user|>\n${query}<|end|>\n<|assistant|>\n`;
 
   const { input_ids } = await tokenizer(prompt, { return_tensor: false, padding: true, truncation: true });
 
