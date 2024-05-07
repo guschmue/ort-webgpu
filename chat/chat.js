@@ -95,7 +95,7 @@ function copyTextToClipboard(responseDiv, with_button) {
 
 
 // Function to handle the user input and call the API functions
-async function submitRequest() {
+async function submitRequest(keep_cache = false) {
   if (sendButton.innerHTML == "Stop") {
     llm.abort();
     return;
@@ -140,7 +140,7 @@ async function submitRequest() {
   // change autoScroller to keep track of our new responseDiv
   autoScroller.observe(responseDiv);
 
-  Query(input, (word) => {
+  Query(keep_cache, input, (word) => {
     // add word to response
     responseDiv.innerHTML = DOMPurify.sanitize(marked.parse(word)); // Append word to response container
   }).then(() => {
@@ -171,24 +171,26 @@ const preCannedQueries = {
 document.getElementById('user-input').addEventListener('keydown', function (e) {
   if (e.ctrlKey) {
     if (e.key === 'Enter') {
-      submitRequest();
+      submitRequest(true);
     } else {
       const query = preCannedQueries[e.key];
       if (query) {
         document.getElementById('user-input').value = query;
-        submitRequest();
+        submitRequest(false);
       }
     }
+  } else if (e.key === 'Enter') {
+    submitRequest(false);
   }
 });
 
 const MODELS = {
-  "tinyllama": { name: "tinyllama", path: "schmuell/TinyLlama-1.1B-Chat-v1.0-int4" },
-  "tinyllama_fp16": { name: "tinyllama-fp16", path: "schmuell/TinyLlama-1.1B-Chat-v1.0-fp16", externaldata: true },
-  "phi2": { name: "phi2", path: "schmuell/phi2-int4" },
+  "tinyllama": { name: "tinyllama", path: "schmuell/TinyLlama-1.1B-Chat-v1.0-int4", file: "decoder_model_merged" },
+  "tinyllama_fp16": { name: "tinyllama-fp16", path: "schmuell/TinyLlama-1.1B-Chat-v1.0-fp16", externaldata: true, file: "decoder_model_merged" },
+  "phi2": { name: "phi2", path: "schmuell/phi2-int4", file: "decoder_model_merged" },
   "phi3": { name: "phi3", path: "schmuell/phi3-int4", externaldata: true },
   "phi3-1": { name: "phi3-1", path: "schmuell/phi3-1", externaldata: true },
-  "stablelm": { name: "stablelm", path: "schmuell/stablelm-2-zephyr-1_6b-int4" },
+  "stablelm": { name: "stablelm", path: "schmuell/stablelm-2-zephyr-1_6b-int4", file: "decoder_model_merged" },
 }
 
 function getConfig() {
@@ -199,6 +201,7 @@ function getConfig() {
     profiler: 0,
     verbose: 0,
     threads: 1,
+    show_special: 0,
     csv: 0,
     max_tokens: 9999,
     local: 0,
@@ -263,20 +266,23 @@ class LLM {
     const provider = options.provider || "webgpu";
     const verbose = options.verbose;
     const local = options.local;
+    const hasFP16 = options.hasFP16;
     this.profiler = options.profiler;
 
     const model_path = (local) ? "models/" + model.path : "https://huggingface.co/" + model.path + "/resolve/main";
+    let model_file = model.file || "model";
+    model_file = (hasFP16 && model_file != "decoder_model_merged") ? model_file + "_fp16.onnx" : model_file + ".onnx";
 
     log(`loading... ${model.name},  ${provider}`);
     const json_bytes = await fetchAndCache(model_path + "/config.json");
     let textDecoder = new TextDecoder();
     const model_config = JSON.parse(textDecoder.decode(json_bytes));
 
-    const model_bytes = await fetchAndCache(model_path + "/onnx/decoder_model_merged.onnx");
-    const externaldata = (model.externaldata) ? await fetchAndCache(model_path + '/onnx/decoder_model_merged.onnx.data') : false;
+    const model_bytes = await fetchAndCache(model_path + "/onnx/" + model_file);
+    const externaldata = (model.externaldata) ? await fetchAndCache(model_path + "/onnx/" + model_file + '.data') : false;
     let modelSize = model_bytes.byteLength;
     if (externaldata) {
-        modelSize += externaldata.byteLength;
+      modelSize += externaldata.byteLength;
     }
     log(`model size ${Math.round(modelSize / 1024 / 1024)} MB`);
 
@@ -288,9 +294,6 @@ class LLM {
 
     switch (provider) {
       case "webgpu":
-        if (!("gpu" in navigator)) {
-          throw new Error("webgpu is NOT supported");
-        }
         for (let i = 0; i < model_config.num_hidden_layers; ++i) {
           opt.preferredOutputLocation[`present.${i}.key`] = 'gpu-buffer';
           opt.preferredOutputLocation[`present.${i}.value`] = 'gpu-buffer';
@@ -302,7 +305,7 @@ class LLM {
       opt.externalData = [
         {
           data: externaldata,
-          path: 'decoder_model_merged.onnx.data'
+          path: model_file + ".data",
         },
       ]
     }
@@ -322,7 +325,7 @@ class LLM {
     this.sess = await ort.InferenceSession.create(model_bytes, opt);
     this.eos = model_config.eos_token_id;
     this.kv_dims = [1, model_config.num_key_value_heads, 0, model_config.hidden_size / model_config.num_attention_heads];
-    this.dtype = config.model.dtype || "float16";
+    this.dtype = (hasFP16) ? "float16" : "float32";
     this.num_layers = model_config.num_hidden_layers;
     this.initilize_feed();
   }
@@ -336,7 +339,6 @@ class LLM {
     }
     this.output_tokens = [];
   }
-
 
   argmax(t) {
     const arr = t.data;
@@ -384,17 +386,17 @@ class LLM {
     this.stop = false;
 
     if (keep_cache) {
-      this.output_tokens.push(...input_ids)
+      this.output_tokens.push(...input_ids.data);
     } else {
-        this.initilize_feed();
-        this.output_tokens = Array.from(feed['input_ids'].data);
+      this.initilize_feed();
+      this.output_tokens = Array.from(feed['input_ids'].data);
     }
 
     let last_token = 0n;
     let seqlen = this.output_tokens.length;
     if (this.need_position_ids) {
       if (keep_cache) {
-        feed['position_ids'] = new ort.Tensor('int64', BigInt64Array.from({ length: seqlen }, (_, i) => BigInt(i)), [1, input_ids.length]);
+        feed['position_ids'] = new ort.Tensor('int64', BigInt64Array.from({ length: input_ids.size }, (_, i) => BigInt(i)), [1, input_ids.size]);
       } else {
         feed['position_ids'] = new ort.Tensor('int64', BigInt64Array.from({ length: seqlen }, (_, i) => BigInt(i)), [1, seqlen]);
       }
@@ -436,30 +438,32 @@ ort.env.wasm.wasmPaths = document.location.pathname.replace('index.html', '') + 
 const llm = new LLM();
 
 function token_to_text(tokenizer, tokens, startidx) {
-  const txt = tokenizer.decode(tokens.slice(startidx), { skip_special_tokens: true, });
+  const txt = tokenizer.decode(tokens.slice(startidx), { skip_special_tokens: config.show_special != 1, });
   return txt;
 }
 
-async function Query(query, cb) {
+async function Query(keep_cache, query, cb) {
   let prompt = `<|system|>\nYou are a friendly assistant.<|end|>\n<|user|>\n${query}<|end|>\n<|assistant|>\n`;
 
   const { input_ids } = await tokenizer(prompt, { return_tensor: false, padding: true, truncation: true });
 
   const start_timer = performance.now();
   const output_tokens = await llm.generate(input_ids, (output_tokens) => {
+    if (output_tokens.length == input_ids.length + 1) {
+      const took = (performance.now() - start_timer) / 1000;
+      console.log(`time to first token in ${took.toFixed(1)}sec, ${input_ids.length} tokens`);
+    }
     cb(token_to_text(tokenizer, output_tokens, input_ids.length));
-  }, {max_tokens: config.max_tokens});
+  }, { max_tokens: config.max_tokens, keep_cache: keep_cache });
 
   const took = (performance.now() - start_timer) / 1000;
   const txt = token_to_text(tokenizer, output_tokens, input_ids.length);
   cb(txt);
   const seqlen = output_tokens.length;
-  const perf = `${seqlen} tokens in ${took.toFixed(1)}sec, ${(seqlen / took).toFixed(2)} tokens/sec`;
-  console.log(perf);
+  console.log(`${seqlen} tokens in ${took.toFixed(1)}sec, ${(seqlen / took).toFixed(2)} tokens/sec`);
 }
 
-
-async function LoadModel() {
+async function LoadModel(hasFP16) {
   try {
     tokenizer = await AutoTokenizer.from_pretrained(config.model.path);
 
@@ -470,6 +474,7 @@ async function LoadModel() {
       verbose: config.verbose,
       local: config.local,
       max_tokens: config.max_tokens,
+      hasFP16: hasFP16,
     });
     log("Ready.");
   } catch (error) {
@@ -477,19 +482,29 @@ async function LoadModel() {
   }
 }
 
-async function hasFp16() {
+async function hasWebGPU() {
+  // returns 0 for webgpu with f16, 1 for webgpu without f16, 2 for no webgpu
+  if (!("gpu" in navigator)) {
+    return 2;
+  }
   try {
     const adapter = await navigator.gpu.requestAdapter()
-    return adapter.features.has('shader-f16')
+    if (adapter.features.has('shader-f16')) {
+      return 0;
+    }
+    return 1;
   } catch (e) {
-    return false
+    return 2;
   }
 }
 
 window.onload = () => {
-  hasFp16().then((fp16) => {
-    if (fp16) {
-      LoadModel().then(() => {
+  hasWebGPU().then((supported) => {
+    if (supported < 2) {
+      if (supported == 1) {
+        log("Your GPU or Browser does not support webgpu with f16, using f32 instead.");
+      }
+      LoadModel(supported === 0).then(() => {
         adjustPadding();
         sendButton.addEventListener('click', submitRequest);
         const userInput = document.getElementById('user-input');
@@ -497,7 +512,7 @@ window.onload = () => {
         userInput.focus();
       });
     } else {
-      log("Your GPU or Browser doesn't support webgpu/f16");
+      log("Your GPU or Browser does not support webgpu");
     }
   });
 }
