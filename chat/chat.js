@@ -171,7 +171,8 @@ const preCannedQueries = {
 document.getElementById('user-input').addEventListener('keydown', function (e) {
   if (e.ctrlKey) {
     if (e.key === 'Enter') {
-      submitRequest(true);
+      // make this true to add to context
+      submitRequest(false);
     } else {
       const query = preCannedQueries[e.key];
       if (query) {
