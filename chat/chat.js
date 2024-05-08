@@ -95,11 +95,13 @@ function copyTextToClipboard(responseDiv, with_button) {
 
 
 // Function to handle the user input and call the API functions
-async function submitRequest(keep_cache = false) {
+async function submitRequest(e) {
   if (sendButton.innerHTML == "Stop") {
     llm.abort();
     return;
   }
+
+  const keep_cache = false; // e.ctrlKey && e.key === 'Enter';
 
   document.getElementById('chat-container').style.display = 'block';
 
@@ -171,17 +173,17 @@ const preCannedQueries = {
 document.getElementById('user-input').addEventListener('keydown', function (e) {
   if (e.ctrlKey) {
     if (e.key === 'Enter') {
-      // make this true to add to context
-      submitRequest(false);
+      submitRequest(e);
     } else {
       const query = preCannedQueries[e.key];
       if (query) {
         document.getElementById('user-input').value = query;
-        submitRequest(false);
+        submitRequest(e);
       }
     }
   } else if (e.key === 'Enter') {
-    submitRequest(false);
+    e.preventDefault();
+    submitRequest(e);
   }
 });
 
