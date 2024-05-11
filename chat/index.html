@@ -1,60 +1,42 @@
-<!DOCTYPE html>
-<html>
+<!doctype html>
+<html lang="en">
 
 <head>
-    <title>Local Chat</title>
-    <link href="resources/bootstrap.min.css" rel="stylesheet"
-        integrity="sha384-4bw+/aepP/YC94hEpVNVgiZdgIC5+VKNBQNGCHeKRQN+PtmoHDEXuppvnDJzQIu9" crossorigin="anonymous">
-    <script src="resources/bootstrap.bundle.min.js"
-        integrity="sha384-HwwvtgBNo3bZJJLYd8oVXjrBZt8cqVSpeBNS5n7C8IVInixGAoxmnlMuBnhbgrkm"
-        crossorigin="anonymous"></script>
-    <script src="resources/marked.min.js"
-        integrity="sha384-dZulhREgb+hCgQMhZ2VG0l37VQj5pJBq2w0h7Jn3tdMn36aXNepF1+FMLBB4O649"
-        crossorigin="anonymous"></script>
-    <script src="resources/purify.min.js" integrity="sha256-QigBQMy2be3IqJD2ezKJUJ5gycSmyYlRHj2VGBuITpU="
-        crossorigin="anonymous"></script>
-    <link rel="stylesheet" href="chat.css">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.1/dist/css/bootstrap.min.css" rel="stylesheet"
+    integrity="sha384-4bw+/aepP/YC94hEpVNVgiZdgIC5+VKNBQNGCHeKRQN+PtmoHDEXuppvnDJzQIu9" crossorigin="anonymous" />
+
+    <title>Chat with onnxruntime-web</title>
+  <script type="module" crossorigin src="/assets/index-Y76sLS_s.js"></script>
+  <link rel="stylesheet" crossorigin href="/assets/index-7kssWANu.css">
 </head>
 
 <body data-bs-theme="dark">
-    
-    <div class="container">
-        <div class="row pt-3">
-            <div class="col-md-8 col-12">
-                <h1>Local Chat</h1>
-            </div>
-            <div id="status">
-            </div>
-        </div>
-        <div id="scroll-wrapper">
-            <div id="chat-container" class="card">
-                <div class="card-body">
-                    <div id="chat-history"></div>
-                </div>
-            </div>
-        </div>
-    </div>
-    <div class="container p-2 card" id="input-area">
-        <div class="input-group">
-            <textarea class="form-control" id="user-input" placeholder="Type your question here ..."></textarea>
-            <button id="send-button" class="btn btn-primary">Send</button>
-        </div>
-    </div>
-    <div class="modal fade" id="errorModal" tabindex="-1">
-        <div class="modal-dialog modal-xl">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title">Unable to access Ollama server</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                </div>
-                <div class="modal-body">
-                    <p id="errorText"></p>
-                </div>
-            </div>
-        </div>
-    </div>
+  <div id="root"></div>
 
-    <script type="module" src="chat.js"></script>
+  <div class="container">
+    <div class="row pt-3">
+      <div class="col-md-8 col-12">
+        <h2>Chat with onnxruntime-web</h2>
+      </div>
+      <div id="status">
+      </div>
+    </div>
+    <div id="scroll-wrapper">
+      <div id="chat-container" class="card">
+        <div class="card-body">
+          <div id="chat-history"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="container p-0 card" id="input-area">
+    <div class="input-group">
+      <textarea class="form-control" id="user-input" placeholder="Type your question here ..."></textarea>
+      <button id="send-button" class="btn btn-primary">Send</button>
+    </div>
+  </div>
 
 </body>
 
